@@ -1,0 +1,385 @@
+#Done in Python, code was originally created to determine whether there were 
+#keywords or tone that indicated a hit song
+
+import sqlite3
+import pandas as pd
+import numpy as np
+
+#Importing New Complete Dataset
+df_total = pd.read_csv('final_dataset.csv', sep=",")
+df_total
+
+# Let's see the shape of this dataframe:
+df_total.shape
+
+# Importing Bag of Words
+bow = pd.read_csv('data/bow_file.csv')
+
+# Let's see the shape of this dataframe:
+bow.shape
+
+# Now, do we need to merge the bag of words with the other data? If so:
+df_allwords = df_total.merge(bow, right_on='track_id', left_on='track_id', how='inner')
+df_allwords.shape
+
+df_allwords.head()
+
+# summarize data
+summary_df_allwords = pd.concat([pd.DataFrame(df_allwords.columns), pd.DataFrame(df_allwords.dtypes.values.reshape([-1,1])),
+                        pd.DataFrame(df_allwords.isnull().sum().values), pd.DataFrame([df_allwords[name].nunique() for name in df_allwords.columns])],
+                       axis=1)
+summary_df_allwords.columns = ['Variable Name', 'Data Type', 'Nulls', 'Unique Values']
+#summary_df_allwords
+
+#Lets begin word analysis by downloading the Being Presidential packages
+from wordcloud import WordCloud
+import nltk
+%matplotlib inline
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import re
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import brier_score_loss
+import time
+import xgboost as xgb
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import Imputer
+
+nltk.download('stopwords')
+nltk.download('wordnet')
+
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+
+#Erase all words associated with how the track is classified from the song title
+wordnet_lemmatizer = WordNetLemmatizer()
+stopset = list(set(stopwords.words('english')))
+cleaned_title = []
+cleaned_titles=[]
+for text in df_total['title']:  # Loop through the tokens (the words or symbols) in each tweet.   
+    cleaned_title = text.lower()  # Convert the text to lower case
+    cleaned_title = re.sub("[^a-zA-Z]"," ", cleaned_title)  # Remove numbers and punctuation.
+    cleaned_title = re.sub("version"," ", cleaned_title)  # Remove version
+    cleaned_title = re.sub("lp"," ", cleaned_title)  # Remove lp
+    cleaned_title = re.sub("album"," ", cleaned_title)  # Remove album
+    cleaned_title = re.sub("digital"," ", cleaned_title)  # Remove album
+    cleaned_title = re.sub("remaster"," ", cleaned_title)  # Remove album
+    cleaned_titles.append(cleaned_title)
+    
+    df_total['CleanTitle'] = cleaned_titles
+df_total.head()
+
+one_long_string =  ' '.join(df_total['CleanTitle'])
+
+#Creating Word Cloud with all Songs
+wordcloud = WordCloud(random_state=201, relative_scaling=1, collocations=True).generate(one_long_string)
+plt.figure(figsize=(10, 10))
+plt.imshow(wordcloud)
+plt.axis('off')
+#plt.title('Title')
+
+#Creating a flag for if the song was a "hit"
+df_total['PopularSong'] = np.where(df_total['count']>=1000, 1, 0)
+
+#Creating a Popylar and Non-Popular Songs data frame
+df_not_popular = df_total[df_total['PopularSong'] == 0]
+df_popular = df_total[df_total['PopularSong'] == 1]
+one_long_string_0 =  ' '.join(df_not_popular['CleanTitle'])
+one_long_string_1 =  ' '.join(df_popular['CleanTitle'])
+
+df_not_popular.shape
+
+df_popular.shape
+
+wordcloud_0 = WordCloud(random_state=201, relative_scaling=1, collocations=True).generate(one_long_string_0)
+plt.figure(figsize=(20, 20))
+plt.imshow(wordcloud_0)
+plt.axis('off')
+plt.title('Not Popular Songs')
+
+wordcloud_1 = WordCloud(random_state=201, relative_scaling=1, collocations=True).generate(one_long_string_1)
+plt.figure(figsize=(20, 20))
+plt.imshow(wordcloud_1)
+plt.axis('off')
+plt.title('Popular Songs')
+
+corpus = list(df_total['CleanTitle'])
+corpus_vectorizer = CountVectorizer(ngram_range=(1, 2), max_features=30)
+bag_of_words = corpus_vectorizer.fit_transform(corpus)
+bag_of_words_df = pd.DataFrame(bag_of_words.toarray(), columns=corpus_vectorizer.get_feature_names())
+
+corpus_1 = list(df_popular['CleanTitle'])
+corpus_vectorizer_1 = CountVectorizer(ngram_range=(1, 2), max_features=30)
+bag_of_words_1 = corpus_vectorizer_1.fit_transform(corpus_1)
+bag_of_words_df_1 = pd.DataFrame(bag_of_words_1.toarray(), columns=corpus_vectorizer_1.get_feature_names())
+Popular_Text = pd.DataFrame(bag_of_words_df_1.mean(axis=0), index=bag_of_words_df_1.columns, columns=['Avg Word Count (Popular Songs)'])
+
+corpus_0 = list(df_not_popular['CleanTitle'])
+corpus_vectorizer_0 = CountVectorizer(ngram_range=(1, 2), max_features=30)
+bag_of_words_0 = corpus_vectorizer_0.fit_transform(corpus_0)
+bag_of_words_df_0 = pd.DataFrame(bag_of_words_0.toarray(), columns=corpus_vectorizer_0.get_feature_names())
+Non_Popular_Text = pd.DataFrame(bag_of_words_df_0.mean(axis=0), index=bag_of_words_df_0.columns, columns=['Avg Word Count (Not Popular Songs)'])
+
+Popular_Text.join(Non_Popular_Text, how='outer')
+
+#Loading in the Happiness Dictionary
+import json
+import urllib.request
+url='http://hedonometer.org/api/v1/words/?format=json'
+data = urllib.request.urlopen(url).read().decode('utf-8')
+loaded_json = json.loads(data)
+happ_dict = loaded_json['objects']
+from pandas.io.json import json_normalize
+happ_df = json_normalize(happ_dict)
+
+word_happs_df = happ_df[['word', 'happs']]
+word_happs_df.shape
+
+#Applying Happiness score to Song Title
+happs_list = []
+for i in range(0, len(df_total)):
+    text = df_total.loc[i]['CleanTitle']
+    text_df = pd.DataFrame(pd.Series(text.split()), columns=['word'])
+    text_happs_df = pd.merge(text_df, word_happs_df, on='word')
+    happs_list.append(text_happs_df['happs'].sum())
+df_total['happ_score'] = happs_list
+
+#Importing Harvard Dictionary
+genInq_df = pd.read_csv('inquirerbasic.csv', encoding='latin-1', low_memory=False)
+
+genInq_df['Entry'] = [word.lower() for word in genInq_df['Entry']]
+
+summary_df = pd.concat([pd.DataFrame(genInq_df.columns), pd.DataFrame(genInq_df.dtypes.values.reshape(-1,1)),
+                        pd.DataFrame(genInq_df.isnull().sum().values), pd.DataFrame([genInq_df[name].nunique() for name in genInq_df.columns])],
+                       axis=1)
+summary_df.columns = ['Variable Name', 'Data Type', 'Nulls', 'Unique Values']
+
+postivie_dummy_df = pd.get_dummies(genInq_df[['Entry','Weak','Strong','Negativ','Self','SureLw','Goal',
+                                              'Our','Active','Passive','Virtue','Race','Means']], 
+                                   columns=['Weak','Strong','Negativ','Self','SureLw','Goal','Our',
+                                            'Active','Passive','Virtue','Race','Means'])
+postivie_dummy_df.head()
+
+weak_list = []
+strong_list = []
+negativ_list = []
+self_list = []
+sureLw_list = []
+goal_list = []
+our_list = []
+legal_list = []
+Active_list = []
+Passive_list = []
+Virtue_list = []
+Race_list = []
+Means_list = []
+
+
+for i in range(0, len(df_total)):
+    text = df_total.loc[i]['CleanTitle']
+    text_df = pd.DataFrame(pd.Series(text.split()), columns=['Entry'])
+    text_positive_df = pd.merge(text_df, postivie_dummy_df, on='Entry')
+    weak_list.append(text_positive_df['Weak_Weak'].sum())
+    strong_list.append(text_positive_df['Strong_Strong'].sum())
+    negativ_list.append(text_positive_df['Negativ_Negativ'].sum())
+    self_list.append(text_positive_df['Self_Self'].sum())
+    sureLw_list.append(text_positive_df['SureLw_SureLw'].sum())
+    goal_list.append(text_positive_df['Goal_Goal'].sum())
+    our_list.append(text_positive_df['Our_Our'].sum())
+    Active_list.append(text_positive_df['Active_Active'].sum())
+    Passive_list.append(text_positive_df['Passive_Passive'].sum())
+    Virtue_list.append(text_positive_df['Virtue_Virtue'].sum())
+    Race_list.append(text_positive_df['Race_Race'].sum())
+    Means_list.append(text_positive_df['Means_Means'].sum())
+df_total['Weaklscore'] = weak_list
+df_total['Strongscore'] = strong_list
+df_total['Negativscore'] = negativ_list
+df_total['Selfscore'] = self_list
+df_total['SureLwscore'] = sureLw_list
+df_total['Goalscore'] = goal_list
+df_total['Ourscore'] = our_list
+df_total['Activescore'] =Active_list
+df_total['Passivescore'] =Passive_list
+df_total['Virtuescore'] =Virtue_list
+df_total['Racescore'] =Race_list
+df_total['Meansscore'] =Means_list
+
+#Creating Genre Dummy Variables
+df_genres = pd.get_dummies(df_total['genre'])
+list(df_genres)
+
+#Appending most cited genres to original data frame. IF THIS DOESN'T WORK, Run the code above
+df_total = df_total.join(df_genres['rock'])
+df_total = df_total.join(df_genres['christian'])
+df_total = df_total.join(df_genres['metal'])
+df_total = df_total.join(df_genres['pop'])
+df_total = df_total.join(df_genres['folk'])
+df_total = df_total.join(df_genres['hiphop'])
+df_total = df_total.join(df_genres['electronic'])
+df_total = df_total.join(df_genres['country'])
+df_total = df_total.join(df_genres['acoustic'])
+df_total = df_total.join(df_genres['hardcore'])
+
+#Word Dummies from Title
+all_dummy = []
+be_dummy = []
+like_dummy = []
+love_dummy = []
+me_dummy = []
+my_dummy = []
+on_dummy = []
+song_dummy = []
+up_dummy = []
+you_dummy = []
+your_dummy = []
+
+for i in range(0, len(df_total)):
+    text = df_total.loc[i]['CleanTitle']
+    all_dummy.append(int('all' in set(text.split())))
+    be_dummy.append(int('be' in set(text.split())))
+    like_dummy.append(int('like' in set(text.split())))
+    love_dummy.append(int('love' in set(text.split())))
+    me_dummy.append(int('me' in set(text.split())))
+    my_dummy.append(int('my' in set(text.split())))
+    on_dummy.append(int('on' in set(text.split())))
+    song_dummy.append(int('song' in set(text.split())))
+    up_dummy.append(int('up' in set(text.split())))
+    you_dummy.append(int('you' in set(text.split())))
+    your_dummy.append(int('your' in set(text.split())))
+    
+df_total['title_all'] = all_dummy
+df_total['title_be'] = be_dummy
+df_total['title_like'] = like_dummy
+df_total['title_love'] = love_dummy
+df_total['title_me'] = me_dummy
+df_total['title_my'] = my_dummy
+df_total['title_on'] = on_dummy
+df_total['title_song'] = song_dummy
+df_total['title_up'] = up_dummy
+df_total['title_you'] = you_dummy
+df_total['title_your'] = your_dummy
+
+#selecting independent variables
+ind_variables_selected = ['duration',
+                          'artist_familiarity',
+                          'artist_hotttnesss',
+                          'year',
+                          #'song_hotttnesss',
+                          'tempo',
+                          'loudness',
+                          'title_all',
+                          'title_be',
+                          'title_like',
+                          'title_love',
+                          'title_me',
+                          'title_my',
+                          'title_on',
+                          'title_song',
+                          'title_up',
+                          'title_you',
+                          'title_your',
+                          'rock',
+                          'christian',
+                          'metal',
+                          'pop',
+                          'electronic',
+                          'country',
+                          'acoustic',
+                          'folk',
+                          'hardcore',
+                         'happ_score',
+                          'Weaklscore',
+                          'Strongscore',
+                          'Negativscore',
+                          'Selfscore',
+                          'SureLwscore',
+                          'Goalscore',
+                          'Ourscore'
+                            ,'Activescore'
+                            ,'Passivescore'
+                            ,'Virtuescore'
+                            ,'Racescore'
+                            ,'Meansscore'
+                         ]
+                     
+#Creating original training and valid sets
+X_orig_train, X_test, y_orig_train, y_test = train_test_split(df_total[ind_variables_selected], df_total['PopularSong'], test_size=0.25, random_state=201)
+np.mean(y_orig_train)
+
+#Defining skill score
+def brier_score(predictions, realizations):
+    this_brier_score = 1 - brier_score_loss(realizations, predictions)
+    return this_brier_score
+    
+#Setting skill score for set
+def skill_score(predictions, realizations):
+    naive = np.repeat(np.mean(y_orig_train), len(realizations))
+    this_skill_score = (brier_score(predictions, realizations) - brier_score(naive, realizations)) / (1 - brier_score(naive, realizations))
+    return this_skill_score
+    
+dt = DecisionTreeClassifier(min_samples_split=1000, max_depth=100, random_state=201)
+dt_model = dt.fit(X_orig_train, y_orig_train)
+pd.DataFrame(dt_model.feature_importances_, index=ind_variables_selected).sort_values(by = 0)
+
+dt_test_prob_all = pd.DataFrame(dt_model.predict_proba(X_test))
+dt_test_prob = dt_test_prob_all[1]
+
+skill_score(dt_test_prob, y_test)
+
+#Random Forest
+rf = RandomForestRegressor(n_estimators=500, max_features=10, min_samples_leaf=4, random_state=201)
+rf_model = rf.fit(X_orig_train, y_orig_train)
+rf_pred = rf_model.predict(X_test)
+
+pd.DataFrame(rf_model.feature_importances_, index=ind_variables_selected)
+
+skill_score(rf_pred, y_test)
+
+#XGBoost
+xgb_train = xgb.DMatrix(X_orig_train, label = y_orig_train)
+xgb_valid = xgb.DMatrix(X_test)
+
+num_round_for_cv = 700
+param = {'max_depth':9, 'eta': 0.05, 'seed': 201, 'objective':'reg:linear'}
+
+xgb.cv(param,
+       xgb_train,
+       num_round_for_cv,
+       nfold = 5,
+       show_stdv = False,
+       verbose_eval = True,
+       as_pandas = False)
+       
+num_round = 147
+xgb_model = xgb.train(param, xgb_train, num_round)
+xgb_pred = xgb_model.predict(xgb_valid)
+
+xgb_model.get_fscore()
+
+xgb_pred_clipped = pd.Series(xgb_pred.clip(0,1))
+
+skill_score(xgb_pred_clipped, y_test)
+
+#Ensemble
+Ensemble = 0.40*(rf_pred)+0.60*(xgb_pred_clipped)
+
+skill_score(Ensemble, y_test)
+
+model_results = zip(y_test, dt_test_prob, rf_pred, xgb_pred_clipped, Ensemble)
+
+# Export to csv to analyze this data on Tableau
+import csv
+
+with open('model_results.csv', "w") as f:
+    writer = csv.writer(f)
+    for row in model_results:
+        writer.writerow(row)
+
+#model_results.to_csv('model_results.csv', index=False)
+
+
